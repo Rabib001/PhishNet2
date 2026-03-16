@@ -3,7 +3,6 @@
 
 **PhishNet** is a secure, localized environment for analyzing suspicious emails. It combines **Google Gemini AI** with robust **heuristic analysis** to detect phishing attempts, while providing a sandboxed "Safe Preview" to view malicious content without risk.
 
-![PhishNet Screenshot](https://via.placeholder.com/800x400?text=PhishNet+Dashboard+Preview)
 
 ## 🚀 Key Features
 
