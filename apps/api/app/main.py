@@ -38,158 +38,456 @@ def _ai_enabled() -> bool:
     return bool(os.getenv("OLLAMA_BASE_URL"))
 
 
-# Known domains that legitimately appear in emails from other senders
+# Third-party domains that legitimately appear in emails from other senders
 _KNOWN_THIRD_PARTY = {
-    # Email marketing / tracking
     "mailchimp.com", "sendgrid.net", "sendgrid.com", "constantcontact.com",
     "mailgun.com", "amazonses.com", "mandrillapp.com", "hubspot.com",
     "marketo.com", "pardot.com", "salesforce.com", "exacttarget.com",
     "list-manage.com", "campaign-archive.com", "createsend.com",
-    # CDNs and hosting
+    "mailjet.com", "postmarkapp.com", "sparkpostmail.com", "sendinblue.com",
+    "brevo.com", "klaviyo.com", "convertkit.com", "drip.com",
+    "aweber.com", "getresponse.com", "activecampaign.com",
+    "customer.io", "intercom.io", "intercom.com", "zendesk.com",
+    "freshdesk.com", "helpscout.com", "drift.com",
     "cloudfront.net", "akamaihd.net", "googleapis.com", "gstatic.com",
     "cloudflare.com", "fastly.net", "edgekey.net", "azureedge.net",
-    "s3.amazonaws.com", "blob.core.windows.net",
-    # URL shorteners (suspicious alone but not phishing)
+    "s3.amazonaws.com", "blob.core.windows.net", "cdn.shopify.com",
+    "imgix.net", "cloudinary.com", "akamai.net", "stackpathdns.com",
+    "jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com",
     "bit.ly", "goo.gl", "t.co", "ow.ly", "tinyurl.com",
-    # Social / common
+    "rebrand.ly", "cutt.ly", "short.io", "lnk.to",
     "facebook.com", "twitter.com", "linkedin.com", "instagram.com",
     "youtube.com", "google.com", "apple.com", "microsoft.com",
-    # Analytics / tracking pixels
+    "pinterest.com", "reddit.com", "tiktok.com", "x.com",
     "doubleclick.net", "google-analytics.com", "demdex.net",
-    "omtrdc.net", "eloqua.com", "marketo.net",
+    "omtrdc.net", "eloqua.com", "marketo.net", "segment.io",
+    "segment.com", "mixpanel.com", "amplitude.com", "hotjar.com",
+    "fullstory.com", "crazyegg.com", "mouseflow.com",
+    "branch.io", "appsflyer.com", "adjust.com", "kochava.com",
+    "open.tracker.com", "pixel.watch", "sentry.io",
+    "stripe.com", "paypal.com", "braintreegateway.com", "squareup.com",
 }
 
+_BRAND_DOMAINS = {
+    "paypal": {"paypal.com", "paypal.me"},
+    "chase": {"chase.com", "jpmorganchase.com"},
+    "bank of america": {"bankofamerica.com", "bofa.com"},
+    "wells fargo": {"wellsfargo.com", "wf.com"},
+    "citibank": {"citi.com", "citibank.com"},
+    "capital one": {"capitalone.com"},
+    "american express": {"americanexpress.com", "amex.com"},
+    "venmo": {"venmo.com"},
+    "zelle": {"zellepay.com"},
+    "stripe": {"stripe.com"},
+    "square": {"squareup.com", "square.com"},
+    "coinbase": {"coinbase.com"},
+    "binance": {"binance.com", "binance.us"},
+    "kraken": {"kraken.com"},
+    "crypto.com": {"crypto.com"},
+    "apple": {"apple.com", "icloud.com"},
+    "google": {"google.com", "gmail.com", "youtube.com", "googleapis.com"},
+    "microsoft": {"microsoft.com", "outlook.com", "office.com", "live.com", "hotmail.com"},
+    "amazon": {"amazon.com", "amazon.co.uk", "amazon.de", "amazon.ca", "amazonaws.com"},
+    "meta": {"meta.com", "facebook.com", "instagram.com"},
+    "netflix": {"netflix.com"},
+    "spotify": {"spotify.com"},
+    "adobe": {"adobe.com"},
+    "dropbox": {"dropbox.com"},
+    "zoom": {"zoom.us", "zoom.com"},
+    "slack": {"slack.com"},
+    "ebay": {"ebay.com"},
+    "walmart": {"walmart.com"},
+    "target": {"target.com"},
+    "best buy": {"bestbuy.com"},
+    "costco": {"costco.com"},
+    "shopify": {"shopify.com", "myshopify.com"},
+    "twitter": {"twitter.com", "x.com"},
+    "linkedin": {"linkedin.com"},
+    "instagram": {"instagram.com"},
+    "tiktok": {"tiktok.com"},
+    "snapchat": {"snapchat.com"},
+    "whatsapp": {"whatsapp.com"},
+    "telegram": {"telegram.org", "t.me"},
+    "discord": {"discord.com", "discord.gg"},
+    "ups": {"ups.com"},
+    "fedex": {"fedex.com"},
+    "usps": {"usps.com"},
+    "dhl": {"dhl.com"},
+    "github": {"github.com"},
+    "docusign": {"docusign.com", "docusign.net"},
+    "intuit": {"intuit.com", "turbotax.com", "quickbooks.com"},
+    "att": {"att.com"},
+    "verizon": {"verizon.com"},
+    "t-mobile": {"t-mobile.com"},
+    "comcast": {"comcast.com", "xfinity.com"},
+}
+
+_DOMAIN_SIBLINGS = {
+    "google.com": {"google.dev", "youtube.com", "gmail.com", "googlesource.com",
+                   "gstatic.com", "appspot.com", "googleusercontent.com",
+                   "googleapis.com", "google.co.uk", "google.co.in", "withgoogle.com",
+                   "chromium.org", "android.com", "googleplex.com"},
+    "microsoft.com": {"office.com", "office365.com", "azure.com", "linkedin.com",
+                      "live.com", "sharepoint.com", "microsoftonline.com",
+                      "outlook.com", "hotmail.com", "bing.com", "skype.com",
+                      "xbox.com", "github.com", "visualstudio.com", "windowsupdate.com"},
+    "amazon.com": {"media-amazon.com", "amazonaws.com", "amazon.co.uk",
+                   "amazon.ca", "amazon.de", "amazon.co.jp", "amazon.in",
+                   "amazon.fr", "amazon.es", "amazon.it", "a2z.com",
+                   "primevideo.com", "aboutamazon.com", "whole-foods.com"},
+    "apple.com": {"icloud.com", "mzstatic.com", "apple.co", "itunes.com"},
+    "meta.com": {"facebook.com", "instagram.com", "whatsapp.com",
+                 "fbcdn.net", "fb.com", "messenger.com", "oculus.com"},
+    "paypal.com": {"paypal.me", "braintreegateway.com", "venmo.com"},
+    "twitter.com": {"x.com", "t.co", "twimg.com"},
+}
+
+_SUSPICIOUS_TLDS = {
+    ".xyz", ".top", ".click", ".buzz", ".info", ".tk", ".ml", ".ga", ".cf",
+    ".gq", ".work", ".life", ".loan", ".racing", ".review", ".science",
+    ".stream", ".download", ".win", ".bid", ".date", ".trade", ".faith",
+    ".party", ".cricket", ".accountant", ".webcam", ".icu", ".monster",
+    ".rest", ".hair", ".quest", ".cfd", ".sbs", ".cyou",
+}
+
+_FREE_HOSTING_DOMAINS = {
+    "weebly.com", "wixsite.com", "wix.com", "wordpress.com", "blogspot.com",
+    "000webhostapp.com", "netlify.app", "vercel.app", "herokuapp.com",
+    "pages.dev", "web.app", "firebaseapp.com", "glitch.me",
+    "replit.co", "repl.co", "surge.sh", "github.io",
+    "duckdns.org", "no-ip.com", "noip.com", "freedns.afraid.org",
+    "ddns.net", "hopto.org", "zapto.org", "sytes.net",
+    "serveo.net", "ngrok.io", "ngrok.app", "trycloudflare.com",
+    "loca.lt", "serveo.net",
+}
+
+_GENERIC_EMAIL_DOMAINS = {
+    "gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com",
+    "aol.com", "protonmail.com", "proton.me", "mail.com", "zoho.com",
+    "yandex.com", "tutanota.com", "fastmail.com", "hey.com",
+    "gmx.com", "gmx.net", "live.com", "msn.com",
+}
+
+
 def _is_third_party_domain(host: str) -> bool:
-    """Check if a domain is a known third-party service."""
     reg = _registrable_domain(host)
     return reg in _KNOWN_THIRD_PARTY or host in _KNOWN_THIRD_PARTY
 
 
-def _heuristic_detect_fallback(e: Email) -> tuple[int, str, list[str]]:
-    """
-    Precision-tuned heuristic detection (V8).
+def _domain_entropy(domain: str) -> float:
+    import math
+    if not domain:
+        return 0.0
+    name = domain.split(".")[0] if "." in domain else domain
+    if not name:
+        return 0.0
+    freq = {}
+    for c in name:
+        freq[c] = freq.get(c, 0) + 1
+    entropy = 0.0
+    for count in freq.values():
+        p = count / len(name)
+        entropy -= p * math.log2(p)
+    return entropy
 
-    Design principles:
-    - Single indicator = low score (informational)
-    - Multiple correlated indicators = escalating score
-    - Known-safe patterns actively reduce score
-    - Only flag phishing (>=65) when there's strong evidence
-    """
+
+def _has_suspicious_tld(domain: str) -> bool:
+    if not domain:
+        return False
+    for tld in _SUSPICIOUS_TLDS:
+        if domain.endswith(tld):
+            return True
+    return False
+
+
+def _is_free_hosting(host: str) -> bool:
+    reg = _registrable_domain(host)
+    return reg in _FREE_HOSTING_DOMAINS or host in _FREE_HOSTING_DOMAINS
+
+
+def _count_subdomains(host: str) -> int:
+    parts = host.strip(".").split(".")
+    if len(parts) <= 2:
+        return 0
+    public_suffix_2 = {"co.uk", "com.au", "co.in", "co.jp", "com.br", "gov.uk", "ac.uk"}
+    if len(parts) >= 3 and ".".join(parts[-2:]) in public_suffix_2:
+        return max(0, len(parts) - 3)
+    return max(0, len(parts) - 2)
+
+
+def _url_has_credential_path(url: str) -> bool:
+    try:
+        path = urlparse(url).path.lower()
+        query = (urlparse(url).query or "").lower()
+    except Exception:
+        return False
+    cred_keywords = [
+        "/login", "/signin", "/sign-in", "/sign_in",
+        "/verify", "/verification", "/validate",
+        "/secure", "/security", "/authenticate",
+        "/account/confirm", "/password", "/credential",
+        "/update-billing", "/update-payment", "/billing-update",
+        "/suspend", "/reactivate", "/unlock",
+    ]
+    combined = path + "?" + query
+    return any(kw in combined for kw in cred_keywords)
+
+
+def _brand_in_url_subdomain(host: str) -> str | None:
+    parts = host.strip(".").split(".")
+    if len(parts) <= 2:
+        return None
+    host_reg = _registrable_domain(host)
+    subdomain_parts = host.replace("." + host_reg, "").split(".")
+    for part in subdomain_parts:
+        for brand, legit_domains in _BRAND_DOMAINS.items():
+            brand_key = brand.replace(" ", "").replace("-", "")
+            if brand_key in part.replace("-", "").replace(".", ""):
+                if host_reg not in legit_domains and not any(
+                    _registrable_domain(d) == host_reg for d in legit_domains
+                ):
+                    return brand
+    return None
+
+
+def _heuristic_detect_fallback(e) -> tuple[int, str, list[str]]:
+    """Heuristic phishing detection. Returns (score, label, reasons)."""
     text = (e.body_text or "").lower()
     subject = (e.subject or "").lower()
     from_addr_raw = e.from_addr or ""
     urls = e.extracted_urls or []
 
-    reasons = []
+    reasons: list[str] = []
     score = 0
-    indicator_count = 0  # Track how many distinct red flags we find
+    indicator_count = 0
 
-    # --- Extract sender info ---
     email_match = re.search(r"<([^>]+)>", from_addr_raw)
     sender_email = email_match.group(1).lower() if email_match else from_addr_raw.lower()
     sender_domain = sender_email.split("@")[-1] if "@" in sender_email else ""
     sender_reg = _registrable_domain(sender_domain)
     sender_display = from_addr_raw.split("<")[0].strip().strip('"').lower() if "<" in from_addr_raw else ""
 
-    # --- 1. Sender Analysis ---
+    # Sender analysis
+    spoofed_brand = None
+    for brand, legit_domains in _BRAND_DOMAINS.items():
+        if brand in sender_display:
+            if not any(sender_reg == _registrable_domain(d) for d in legit_domains):
+                spoofed_brand = brand
+                reasons.append(f"Display name impersonates '{brand}' but sender domain is {sender_domain}")
+                score += 30
+                indicator_count += 1
+                break
 
-    # Display name spoofing: display name contains a well-known brand but email domain doesn't match
-    brand_domains = {
-        "paypal": "paypal.com", "amazon": "amazon.com", "apple": "apple.com",
-        "microsoft": "microsoft.com", "google": "google.com", "netflix": "netflix.com",
-        "bank of america": "bankofamerica.com", "wells fargo": "wellsfargo.com",
-        "chase": "chase.com", "coinbase": "coinbase.com", "binance": "binance.com",
-    }
-    for brand, legit_domain in brand_domains.items():
-        if brand in sender_display and sender_reg != _registrable_domain(legit_domain):
-            reasons.append(f"Sender display name mentions '{brand}' but email domain is {sender_domain}")
-            score += 30
+    # Display name contains a different email than actual sender
+    if re.search(r"[\w.+-]+@[\w.-]+\.\w+", sender_display):
+        display_email_match = re.search(r"([\w.+-]+@[\w.-]+\.\w+)", sender_display)
+        if display_email_match:
+            display_email_domain = display_email_match.group(1).split("@")[-1]
+            if _registrable_domain(display_email_domain) != sender_reg:
+                reasons.append(f"Display name contains email '{display_email_match.group(1)}' but actual sender is {sender_domain}")
+                score += 25
+                indicator_count += 1
+
+    if sender_domain and _has_suspicious_tld(sender_domain):
+        reasons.append(f"Sender domain uses suspicious TLD: {sender_domain}")
+        score += 10
+        indicator_count += 1
+
+    # Randomly generated sender domain
+    if sender_domain and _domain_entropy(sender_domain) > 4.0:
+        sender_name_part = sender_domain.split(".")[0]
+        if len(sender_name_part) > 10:
+            reasons.append(f"Sender domain appears randomly generated: {sender_domain}")
+            score += 10
             indicator_count += 1
-            break
 
-    # --- 2. Content Analysis (conservative weights) ---
+    # Content analysis
+    combined_text = text + " " + subject
 
-    # High-confidence scam phrases (very specific, rarely in legit emails)
     high_conf_phrases = [
         "compensation fund", "winning notification", "inheritance claim",
-        "million usd", "western union", "money gram", "next of kin",
-        "unclaimed fund", "lottery winner", "dear beneficiary",
-        "united nations compensation", "diplomatic agent",
+        "million usd", "million dollars", "western union", "money gram",
+        "next of kin", "unclaimed fund", "lottery winner", "dear beneficiary",
+        "united nations compensation", "diplomatic agent", "barrister chambers",
+        "federal ministry of finance", "central bank of nigeria",
+        "won a lottery", "you have been selected", "beneficiary of",
+        "wire the funds", "processing fee required", "advance fee",
+        "claim your prize", "modalities for payment", "to claim this fund",
+        "contact our fiduciary agent", "your overdue payment",
     ]
-    matched_scam = [p for p in high_conf_phrases if p in text]
+    matched_scam = [p for p in high_conf_phrases if p in combined_text]
     if matched_scam:
         reasons.append(f"High-confidence scam language: '{matched_scam[0]}'")
         score += 40
         indicator_count += 1
 
-    # Urgency language (only contributes if OTHER indicators are also present)
+    cred_phrases = [
+        "enter your password", "confirm your password", "verify your ssn",
+        "social security number", "credit card number", "enter your pin",
+        "update your billing", "confirm your credit card",
+        "verify your bank account", "enter your bank details",
+        "provide your login credentials", "authenticate your account",
+        "your credentials have expired", "re-enter your credentials",
+    ]
+    matched_cred = [p for p in cred_phrases if p in combined_text]
+    if matched_cred:
+        reasons.append(f"Credential harvesting language: '{matched_cred[0]}'")
+        score += 25
+        indicator_count += 1
+
+    financial_bait = [
+        "wire transfer", "bitcoin payment", "gift card",
+        "cryptocurrency wallet", "send bitcoin to",
+        "itunes gift card", "google play card", "steam card",
+        "pay via bitcoin", "payment in cryptocurrency",
+    ]
+    matched_financial = [p for p in financial_bait if p in combined_text]
+    if matched_financial:
+        reasons.append(f"Financial bait language: '{matched_financial[0]}'")
+        score += 20
+        indicator_count += 1
+
+    attachment_bait = [
+        "enable macros", "enable content", "enable editing",
+        ".exe attachment", "open the attached .zip",
+        "download the attachment", "run the attached",
+        "password for the zip is", "password-protected attachment",
+    ]
+    matched_attach = [p for p in attachment_bait if p in combined_text]
+    if matched_attach:
+        reasons.append(f"Attachment-based social engineering: '{matched_attach[0]}'")
+        score += 20
+        indicator_count += 1
+
     urgent_phrases = [
         "account suspended", "account will be closed", "verify your identity",
         "unauthorized transaction", "suspicious activity on your account",
         "confirm your payment", "your account has been limited",
+        "immediate action required", "account will be terminated",
+        "failure to verify will result", "within 24 hours",
+        "within 48 hours your account", "permanent suspension",
     ]
-    has_urgency = any(p in text or p in subject for p in urgent_phrases)
+    has_urgency = any(p in combined_text for p in urgent_phrases)
     if has_urgency:
-        # Urgency alone is worth very little — legit services also send urgent emails
         reasons.append("Urgency/pressure language detected")
         score += 10
         indicator_count += 1
 
-    # --- 3. URL Analysis (the most important signals) ---
+    raw_subject = (e.subject or "")
+    if len(raw_subject) >= 10:
+        upper_ratio = sum(1 for c in raw_subject if c.isupper()) / len(raw_subject)
+        if upper_ratio > 0.6:
+            reasons.append("Excessive capitalization in subject line")
+            score += 5
+            indicator_count += 1
 
-    generic_domains = {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com", "aol.com"}
-    siblings = {
-        "google.com": {"google.dev", "youtube.com", "gmail.com", "googlesource.com", "gstatic.com", "appspot.com", "googleusercontent.com", "googleapis.com"},
-        "microsoft.com": {"office.com", "office365.com", "azure.com", "linkedin.com", "live.com", "sharepoint.com", "microsoftonline.com", "outlook.com"},
-        "amazon.com": {"media-amazon.com", "amazonaws.com", "amazon.co.uk", "amazon.ca", "amazon.de"},
-        "apple.com": {"icloud.com", "mzstatic.com"},
-        "meta.com": {"facebook.com", "instagram.com", "whatsapp.com", "fbcdn.net"},
-    }
-
+    # URL analysis
     has_ip = False
     has_punycode = False
+    has_suspicious_tld_url = False
+    has_free_hosting = False
+    has_brand_subdomain = False
+    has_credential_path = False
+    has_excessive_subdomains = False
     mismatch_count = 0
     total_urls = len(urls)
     has_unsubscribe = False
+    url_domains_match_sender = 0
+    has_data_uri = False
+    has_shortener_with_brand = False
 
     for u in urls[:30]:
         u_lower = u.lower()
+
+        if u_lower.startswith("data:") or u_lower.startswith("javascript:"):
+            if not has_data_uri:
+                reasons.append("Contains data: or javascript: URI")
+                score += 30
+                indicator_count += 1
+                has_data_uri = True
+            continue
+
         host = (urlparse(u).hostname or "").strip(".").lower()
         if not host:
             continue
         host_reg = _registrable_domain(host)
 
-        # Check for unsubscribe links (strong positive signal)
         if "unsubscribe" in u_lower or "opt-out" in u_lower or "optout" in u_lower:
             has_unsubscribe = True
 
-        # Raw IP in link
+        if sender_domain and _domain_matches(sender_domain, host):
+            url_domains_match_sender += 1
+
         if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host) and not has_ip:
-            reasons.append(f"Link uses raw IP address ({host})")
+            reasons.append(f"Link uses raw IP address: {host}")
             score += 35
             indicator_count += 1
             has_ip = True
 
-        # Punycode / IDN homograph
         if "xn--" in host and not has_punycode:
-            reasons.append(f"Punycode/IDN domain detected: {host}")
+            reasons.append(f"Punycode/IDN homograph domain: {host}")
             score += 35
             indicator_count += 1
             has_punycode = True
 
-        # Domain mismatch (skip known third-party services and generic senders)
-        if sender_domain and sender_domain not in generic_domains and not _is_third_party_domain(host):
+        if _has_suspicious_tld(host) and not has_suspicious_tld_url:
+            reasons.append(f"URL uses suspicious TLD: {host}")
+            score += 10
+            indicator_count += 1
+            has_suspicious_tld_url = True
+
+        if _is_free_hosting(host) and not has_free_hosting:
+            has_free_hosting = True
+
+        subdomain_count = _count_subdomains(host)
+        if subdomain_count >= 3 and not has_excessive_subdomains:
+            reasons.append(f"URL has {subdomain_count} subdomains: {host}")
+            score += 15
+            indicator_count += 1
+            has_excessive_subdomains = True
+
+        brand_in_sub = _brand_in_url_subdomain(host)
+        if brand_in_sub and not has_brand_subdomain:
+            reasons.append(f"Brand '{brand_in_sub}' used as subdomain of unrelated domain: {host}")
+            score += 30
+            indicator_count += 1
+            has_brand_subdomain = True
+
+        if _url_has_credential_path(u) and not _domain_matches(sender_domain or "", host):
+            if not _is_third_party_domain(host) and not has_credential_path:
+                has_credential_path = True
+
+        shortener_domains = {"bit.ly", "goo.gl", "t.co", "ow.ly", "tinyurl.com",
+                             "rebrand.ly", "cutt.ly", "short.io", "is.gd", "v.gd"}
+        if host_reg in shortener_domains and spoofed_brand and not has_shortener_with_brand:
+            reasons.append(f"URL shortener ({host}) used in context of brand impersonation")
+            score += 15
+            indicator_count += 1
+            has_shortener_with_brand = True
+
+        if sender_domain and sender_domain not in _GENERIC_EMAIL_DOMAINS and not _is_third_party_domain(host):
             is_safe = False
             if _domain_matches(sender_domain, host):
                 is_safe = True
-            if not is_safe and sender_reg in siblings:
-                if any(host_reg == _registrable_domain(s) or host.endswith("." + s) for s in siblings[sender_reg]):
+            if not is_safe and sender_reg in _DOMAIN_SIBLINGS:
+                if any(host_reg == _registrable_domain(s) or host.endswith("." + s)
+                       for s in _DOMAIN_SIBLINGS[sender_reg]):
                     is_safe = True
-            if not is_safe and not _is_third_party_domain(host):
+            if not is_safe:
                 mismatch_count += 1
 
-    # Only flag mismatch if it's the MAJORITY of links (not just one tracking pixel)
+    if has_credential_path and mismatch_count > 0:
+        reasons.append("Credential-harvesting URL path on domain unrelated to sender")
+        score += 15
+        indicator_count += 1
+
+    if has_free_hosting and indicator_count >= 1:
+        reasons.append("Links point to free hosting / dynamic DNS provider")
+        score += 15
+        indicator_count += 1
+
     if mismatch_count > 0 and total_urls > 0:
+        non_thirdparty_count = max(mismatch_count, 1)
         mismatch_ratio = mismatch_count / min(total_urls, 30)
         if mismatch_ratio > 0.5:
             reasons.append(f"Majority of links ({mismatch_count}/{min(total_urls, 30)}) point to domains unrelated to sender ({sender_domain})")
@@ -200,20 +498,38 @@ def _heuristic_detect_fallback(e: Email) -> tuple[int, str, list[str]]:
             score += 15
             indicator_count += 1
 
-    # --- 4. Positive signals (reduce score) ---
+    # Cross-correlation
+    if spoofed_brand and (has_ip or has_punycode or has_brand_subdomain):
+        reasons.append("Brand impersonation + deceptive URL infrastructure")
+        score += 15
 
+    if has_urgency and (matched_cred or has_credential_path) and mismatch_count > 0:
+        reasons.append("Urgency + credential harvesting + mismatched URLs")
+        score += 15
+
+    if indicator_count >= 4:
+        reasons.append(f"{indicator_count} independent indicators detected")
+        score += 20
+    elif indicator_count >= 3:
+        reasons.append(f"{indicator_count} correlated indicators")
+        score += 10
+
+    # Negative signals (reduce FPs)
     if has_unsubscribe and score > 0:
-        reasons.append("Contains unsubscribe link (common in legitimate bulk email)")
+        reasons.append("Has unsubscribe link")
         score = max(0, score - 15)
 
-    # Short, simple emails with no URLs are very low risk
+    if total_urls > 0 and url_domains_match_sender == total_urls:
+        reasons.append("All URLs match sender domain")
+        score = max(0, score - 10)
+    elif total_urls > 2 and url_domains_match_sender >= total_urls * 0.7:
+        score = max(0, score - 5)
+
     if total_urls == 0 and len(text) < 500:
         score = max(0, score - 10)
 
-    # --- 5. Correlation bonus: multiple indicators compound ---
-    if indicator_count >= 3:
-        reasons.append(f"Multiple correlated indicators ({indicator_count}) suggest coordinated phishing attempt")
-        score += 15
+    if sender_domain in _GENERIC_EMAIL_DOMAINS:
+        score = max(0, score - 5)
 
     score = max(0, min(100, score))
     label = "phishing" if score >= 65 else "suspicious" if score >= 30 else "benign"
@@ -460,7 +776,6 @@ async def detect(email_id: str, use_llm: bool = True, db: Session = Depends(get_
     body_text = e.body_text or ""
     urls: list[str] = e.extracted_urls or []
 
-    # 1. Try Local AI First
     if use_llm and _ai_enabled():
         try:
             print(f"DEBUG: Attempting Local AI detection for {email_id}")
@@ -514,8 +829,7 @@ async def detect(email_id: str, use_llm: bool = True, db: Session = Depends(get_
             traceback.print_exc()  # PRINT FULL ERROR
             # Fall through to heuristics below...
 
-    # 2. Fallback to Robust V7 Heuristics
-    print(f"DEBUG: Running Heuristic Fallback for {email_id}")
+    print(f"DEBUG: Running heuristic fallback for {email_id}")
     score, label, reasons = _heuristic_detect_fallback(e)
     if _ai_enabled():
         reasons.append("Note: AI analysis failed; used heuristics")
