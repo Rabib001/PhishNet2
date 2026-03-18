@@ -14,10 +14,14 @@ def database_url() -> str:
     return url
 
 
-# SQLite specific: check_same_thread=False is required for FastAPI
+url = database_url()
+connect_args = {}
+if url.startswith("sqlite"):
+    connect_args["check_same_thread"] = False
+
 engine = create_engine(
-    database_url(), 
-    connect_args={"check_same_thread": False},
+    url,
+    connect_args=connect_args,
     pool_pre_ping=True
 )
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
