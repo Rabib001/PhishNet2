@@ -13,12 +13,26 @@
 * **🔐 Privacy Focused:** Self-hosted via Docker. Your emails stay on your machine (except for the text sent to Gemini API for analysis).
 
 
+## Detection Methodology
+
+PhishNet's heuristic engine applies six independent checks to every email. Each targets a specific attacker technique:
+
+- **Raw IP Links** — Commodity phishing kits often skip domain registration and host directly on IP addresses. Legitimate services virtually never send emails with raw IP links.
+- **Punycode / IDN Homograph Domains** — Attackers register internationalized domain names that visually mimic legitimate domains (e.g., `pаypal.com` using Cyrillic 'а' instead of Latin 'a'). PhishNet decodes punycode and flags visually deceptive domains.
+- **Link-Text Mismatches** — Social engineering technique where the displayed URL text differs from the actual href destination. For example, showing "https://paypal.com" but linking to "https://evil.com/harvest".
+- **Domain Root Matching** — Catches subdomain abuse and lookalike domains. `paypal-support.com` is NOT `paypal.com`. PhishNet extracts and compares domain roots to detect impersonation.
+- **Financial Scam Phrases** — Pattern matching for common social engineering language: "compensation fund", "winning notification", "unclaimed inheritance" — phrases statistically overrepresented in phishing campaigns.
+- **Urgency Indicators** — Detects pressure language ("account suspended", "action required", "verify immediately") used to bypass rational decision-making.
+
+> **Note:** The heuristic engine runs independently of the AI model, ensuring detection continues even if the LLM is unavailable or returns ambiguous results.
+
+---
 
 ## 🏗️ Architecture
 
 PhishNet runs as a multi-container Docker application:
 
-```
+```mermaid
 graph TD
     User[User / Browser] -->|Uploads .eml| Web[Next.js Frontend]
     Web -->|API Calls| API[FastAPI Backend]
@@ -26,7 +40,6 @@ graph TD
     API -->|Analyze Text| Gemini[Google Gemini API]
     API -->|Render & Screenshot| Runner[Headless Browser Service]
     Runner -->|Save Artifacts| Volume[Local Storage]
-
 ```
 
 ---
@@ -46,7 +59,7 @@ graph TD
 ### 1. Clone the Repository
 
 ```bash
-git clone [https://github.com/yourusername/phishnet.git](https://github.com/yourusername/phishnet.git)
+git clone [https://github.com/Mananshah237/phishnet.git](https://github.com/Mananshah237/phishnet.git)
 cd phishnet
 
 ```
@@ -100,6 +113,44 @@ docker compose up -d --build
 
 3. **Result:** You get a Score (0-100) and a Verdict (Safe, Suspicious, Phishing).
 4. **Open Safely:** Click "Open Safely" to render the email in a remote browser and see what it looks like without clicking anything locally.
+
+---
+
+## Sample Analysis Output
+
+```
+Email: "Your PayPal account has been limited"
+From: service@paypa1-support.com
+
+Risk Score: 87/100 — PHISHING
+
+AI Verdict: phishing
+AI Reasons:
+  - Sender domain "paypa1-support.com" impersonates PayPal
+  - Contains urgent language pressuring immediate action
+  - Links point to non-PayPal domains
+
+Heuristic Flags:
+  ⚠ Domain root mismatch: "paypa1-support.com" ≠ "paypal.com" (+40)
+  ⚠ Urgency language detected: "account has been limited" (+25)
+  ⚠ Link-text mismatch: displayed URL differs from href (+40)
+
+Final Score: 87 (AI: 75, boosted by heuristic guardrails)
+Verdict: PHISHING
+```
+
+---
+
+## Security Architecture
+
+The "Open Safely" sandbox exists because raw emails are hostile documents:
+
+- **Tracking pixels, JavaScript, and auto-loading external resources** embedded in emails can fingerprint the analyst's machine — leaking IP, OS, browser version, and screen resolution to the attacker.
+- **Opening links directly** exposes your IP, browser fingerprint, and session to the attacker, confirming the target is actively investigating.
+- **PhishNet's headless Chromium sandbox** renders in isolation with a default-deny network policy. The browser instance runs inside a dedicated container with no access to the host network or filesystem.
+- **Only the target origin is optionally allowed** — all other requests (tracking pixels, third-party scripts, analytics) are blocked at the network level.
+- **Output is non-interactive:** screenshots + extracted text + IOCs — no executable content reaches the analyst. What you see is a static capture, not a live page.
+- **The runner container is ephemeral** — each render job starts clean with no persistent state. Cookies, localStorage, and any injected payloads are destroyed when the job completes.
 
 ---
 
