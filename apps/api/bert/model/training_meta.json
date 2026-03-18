@@ -1,0 +1,10 @@
+{
+  "base_model": "distilbert-base-uncased",
+  "max_length": 256,
+  "epochs": 3,
+  "train_samples": 4000,
+  "test_accuracy": 0.962,
+  "test_f1": 0.9622266401590457,
+  "test_precision": 0.9565217391304348,
+  "test_recall": 0.968
+}

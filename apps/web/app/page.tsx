@@ -96,6 +96,9 @@ export default function Home() {
   const [rewrite, setRewrite] = useState<Rewrite | null>(null);
   const [useLlm, setUseLlm] = useState(false);
 
+  const [detectionMethod, setDetectionMethod] = useState<string>('heuristic');
+  const [availableMethods, setAvailableMethods] = useState<{heuristic: boolean; llm: boolean; bert: boolean}>({heuristic: true, llm: false, bert: false});
+
   const [busyMsg, setBusyMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -173,7 +176,7 @@ export default function Home() {
       setSelectedId(id);
       await loadEmail(id);
 
-      await fetch(`${base}/emails/${id}/detect`, { method: 'POST' });
+      await fetch(`${base}/emails/${id}/detect?method=${encodeURIComponent(detectionMethod)}`, { method: 'POST' });
       const qs = new URLSearchParams({ use_llm: useLlm ? 'true' : 'false' });
       await fetch(`${base}/emails/${id}/rewrite?${qs.toString()}`, { method: 'POST' });
       await loadEmail(id);
@@ -189,7 +192,7 @@ export default function Home() {
     setDetecting(true);
     setError(null);
     try {
-      const res = await fetch(`${base}/emails/${selectedId}/detect`, { method: 'POST' });
+      const res = await fetch(`${base}/emails/${selectedId}/detect?method=${encodeURIComponent(detectionMethod)}`, { method: 'POST' });
       if (!res.ok) throw new Error(`Detect failed: ${res.status}`);
       const d = (await res.json()) as Detection;
       setDetection(d);
@@ -308,12 +311,20 @@ export default function Home() {
     return <span className={`badge badge--${level}`}>{labels[level]} {score}</span>;
   }
 
+  async function refreshMethods() {
+    try {
+      const res = await fetch(`${base}/detect/methods`, { cache: 'no-store' });
+      if (res.ok) setAvailableMethods(await res.json());
+    } catch { /* ignore */ }
+  }
+
   /* --- effects --- */
 
   useEffect(() => {
     (async () => {
       try {
         await refreshHealth();
+        await refreshMethods();
         await refreshEmails(true);
       } catch {
         /* ignore */
@@ -429,6 +440,36 @@ export default function Home() {
               />
               Use LLM rewrite
             </label>
+          </div>
+
+          {/* Detection method selector */}
+          <div className="method-selector" onClick={(e) => e.stopPropagation()}>
+            <div className="method-selector-label">Detection method</div>
+            <div className="method-selector-options">
+              {(['heuristic', 'llm', 'bert'] as const).map((m) => (
+                <label key={m} className={`method-option${!availableMethods[m] ? ' method-option--disabled' : ''}`}>
+                  <input
+                    type="radio"
+                    name="detection-method"
+                    value={m}
+                    checked={detectionMethod === m}
+                    onChange={() => setDetectionMethod(m)}
+                    disabled={!availableMethods[m]}
+                  />
+                  {m === 'heuristic' ? 'Heuristic' : m === 'llm' ? 'LLM (Llama)' : 'BERT'}
+                </label>
+              ))}
+              <label className="method-option">
+                <input
+                  type="radio"
+                  name="detection-method"
+                  value="heuristic,llm,bert"
+                  checked={detectionMethod === 'heuristic,llm,bert'}
+                  onChange={() => setDetectionMethod('heuristic,llm,bert')}
+                />
+                All
+              </label>
+            </div>
           </div>
 
           {/* Inbox */}

@@ -760,85 +760,141 @@ def get_email(email_id: str, db: Session = Depends(get_db)):
     }
 
 
+def _bert_enabled() -> bool:
+    try:
+        from app.bert_engine import bert_available
+        return bert_available()
+    except Exception:
+        return False
+
+
+def _run_llm_detection(subject, from_addr, body_text, urls):
+    try:
+        ai = detect_email_with_local_ai(subject, from_addr, body_text, urls)
+        final_score = int(ai.get("score", 0))
+        label = str(ai.get("label", "benign")).lower()
+        ai_reasons = ai.get("reasons", []) or []
+
+        reasons = []
+        if isinstance(ai_reasons, list):
+            reasons.extend([str(x) for x in ai_reasons if str(x).strip()])
+        else:
+            reasons.append(str(ai_reasons))
+
+        # guardrail: bump score if obvious technical indicators present but LLM missed them
+        has_ip_link = False
+        has_punycode = False
+        for u in urls[:25]:
+            host = (urlparse(u).hostname or "").strip(".").lower()
+            if not host:
+                continue
+            if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host):
+                has_ip_link = True
+            if "xn--" in host:
+                has_punycode = True
+
+        if (has_ip_link or has_punycode) and final_score < 40:
+            old_score = final_score
+            final_score = max(final_score, 55)
+            if final_score != old_score:
+                reasons.append(f"Guardrail: score adjusted from {old_score}")
+                label = "suspicious" if label == "benign" else label
+
+        final_score = max(0, min(100, final_score))
+        if label == "benign" and final_score > 60:
+            final_score = 15
+        elif label == "phishing" and final_score < 30:
+            label = "suspicious"
+
+        seen = set()
+        reasons = [x for x in reasons if not (x in seen or seen.add(x))]
+        return final_score, label, reasons
+    except Exception as ex:
+        print(f"LLM detection failed: {ex}")
+        traceback.print_exc()
+        return None
+
+
+def _run_bert_detection(subject, from_addr, body_text, urls):
+    try:
+        from app.bert_engine import detect_email_with_bert
+        result = detect_email_with_bert(subject, from_addr, body_text, urls)
+        return int(result["score"]), result["label"], result["reasons"]
+    except Exception as ex:
+        print(f"BERT detection failed: {ex}")
+        traceback.print_exc()
+        return None
+
+
+@app.get("/detect/methods")
+def available_methods():
+    return {
+        "heuristic": True,
+        "llm": _ai_enabled(),
+        "bert": _bert_enabled(),
+    }
+
+
 @app.post("/emails/{email_id}/detect", response_model=DetectionResult)
-async def detect(email_id: str, use_llm: bool = True, db: Session = Depends(get_db)):
+async def detect(email_id: str, method: str = "heuristic", db: Session = Depends(get_db)):
     e = db.query(Email).filter(Email.id == email_id).first()
     if not e:
         raise HTTPException(status_code=404, detail="email not found")
 
-    # Delete old detections for this email to avoid ORM relationship issues
     db.query(Detection).filter(Detection.email_id == email_id).delete()
     db.flush()
 
     subject = e.subject or ""
     from_addr = e.from_addr or ""
-    to_addr = e.to_addr or ""
     body_text = e.body_text or ""
     urls: list[str] = e.extracted_urls or []
 
-    if use_llm and _ai_enabled():
-        try:
-            print(f"DEBUG: Attempting Local AI detection for {email_id}")
-            ai = detect_email_with_local_ai(subject, from_addr, body_text, urls)
+    methods = {m.strip().lower() for m in method.split(",")}
+    results = []
 
-            final_score = int(ai.get("score", 0))
-            label = str(ai.get("label", "benign")).lower()
-            ai_reasons = ai.get("reasons", []) or []
-            
-            reasons = []
-            if isinstance(ai_reasons, list):
-                reasons.extend([str(x) for x in ai_reasons if str(x).strip()])
-            else:
-                reasons.append(str(ai_reasons))
+    if "llm" in methods and _ai_enabled():
+        r = _run_llm_detection(subject, from_addr, body_text, urls)
+        if r:
+            results.append(("LLM", r))
 
-            # Guardrail: Only override if AI scored way too low on obvious technical indicators
-            has_ip_link = False
-            has_punycode = False
-            for u in urls[:25]:
-                host = (urlparse(u).hostname or "").strip(".").lower()
-                if not host: continue
-                if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host): has_ip_link = True
-                if "xn--" in host: has_punycode = True
+    if "bert" in methods and _bert_enabled():
+        r = _run_bert_detection(subject, from_addr, body_text, urls)
+        if r:
+            results.append(("BERT", r))
 
-            if (has_ip_link or has_punycode) and final_score < 40:
-                old_score = final_score
-                final_score = max(final_score, 55)
-                if final_score != old_score:
-                    reasons.append(f"Guardrail: Technical indicator present, score adjusted from {old_score}")
-                    label = "suspicious" if label == "benign" else label
+    if "heuristic" in methods:
+        score, label, reasons = _heuristic_detect_fallback(e)
+        results.append(("Heuristic", (score, label, reasons)))
 
-            # Final bounds
-            final_score = max(0, min(100, final_score))
+    # if nothing ran (bad method name or all failed), fall back to heuristic
+    if not results:
+        score, label, reasons = _heuristic_detect_fallback(e)
+        results.append(("Heuristic", (score, label, reasons)))
 
-            # Consistency check: only fix extreme contradictions
-            if label == "benign" and final_score > 60:
-                final_score = 15
-            elif label == "phishing" and final_score < 30:
-                label = "suspicious"
-                
-            seen = set()
-            reasons = [x for x in reasons if not (x in seen or seen.add(x))]
+    # combine results: take max score, most severe label, union reasons
+    final_score = 0
+    final_label = "benign"
+    all_reasons = []
+    label_priority = {"benign": 0, "suspicious": 1, "phishing": 2}
 
-            det = Detection(email_id=email_id, label=label, risk_score=final_score, reasons=reasons, created_at=datetime.now(timezone.utc))
-            db.add(det)
-            db.commit()
-            return DetectionResult(label=label, risk_score=final_score, reasons=reasons)
+    for name, (score, label, reasons) in results:
+        prefix = f"[{name}] " if len(results) > 1 else ""
+        all_reasons.extend([f"{prefix}{r}" for r in reasons])
+        if score > final_score:
+            final_score = score
+        if label_priority.get(label, 0) > label_priority.get(final_label, 0):
+            final_label = label
 
-        except Exception as ex:
-            print(f"ERROR: Local AI Detection failed (falling back): {ex}")
-            traceback.print_exc()  # PRINT FULL ERROR
-            # Fall through to heuristics below...
+    final_score = max(0, min(100, final_score))
 
-    print(f"DEBUG: Running heuristic fallback for {email_id}")
-    score, label, reasons = _heuristic_detect_fallback(e)
-    if _ai_enabled():
-        reasons.append("Note: AI analysis failed; used heuristics")
-
-    det = Detection(email_id=email_id, label=label, risk_score=score, reasons=reasons, created_at=datetime.now(timezone.utc))
+    det = Detection(
+        email_id=email_id, label=final_label, risk_score=final_score,
+        reasons=all_reasons, created_at=datetime.now(timezone.utc),
+    )
     db.add(det)
     db.commit()
 
-    return DetectionResult(label=label, risk_score=score, reasons=reasons)
+    return DetectionResult(label=final_label, risk_score=final_score, reasons=all_reasons)
 
 
 @app.post("/emails/{email_id}/rewrite", response_model=RewriteResult)
@@ -890,7 +946,6 @@ Original email:
     return RewriteResult(safe_subject=e.subject, safe_body=safe_body, used_llm=used_llm_actual)
 
 
-# ... (OpenSafely endpoints below)
 @app.post("/emails/{email_id}/open-safely")
 async def open_safely(email_id: str, req: OpenSafelyRequest, db: Session = Depends(get_db)):
     e = db.query(Email).filter(Email.id == email_id).first()

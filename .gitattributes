@@ -1,0 +1,1 @@
+apps/api/bert/model/model.safetensors filter=lfs diff=lfs merge=lfs -text

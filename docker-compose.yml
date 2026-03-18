@@ -40,10 +40,11 @@ services:
       - OLLAMA_BASE_URL=http://ollama:11434
       - ARTIFACT_DIR=/artifacts
       - RUNNER_BASE_URL=http://runner:7070
+      - BERT_MODEL_PATH=/app/bert/model
     volumes:
       - ./artifacts:/artifacts
-      # Volume for SQLite DB persistence
       - ./apps/api/data:/app/data
+      - ./apps/api/bert/model:/app/bert/model
     ports:
       - "8000:8000"
 
