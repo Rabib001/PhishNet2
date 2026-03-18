@@ -73,6 +73,9 @@ export default function Home() {
     iocsUrl?: string;
   }>({ open: false, loading: false });
 
+  const [iocsData, setIocsData] = useState<any>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
+
   async function refreshHealth() {
     const res = await fetch(`${base}/health`, { cache: 'no-store' });
     setHealth(await res.json());
@@ -168,9 +171,27 @@ export default function Home() {
     }
   }
 
+  async function deleteEmail(id: string, ev: React.MouseEvent) {
+    ev.stopPropagation();
+    if (!confirm('Delete this email?')) return;
+    try {
+      await fetch(`${base}/emails/${id}`, { method: 'DELETE' });
+      if (selectedId === id) {
+        setSelectedId(null);
+        setDetail(null);
+        setDetection(null);
+        setRewrite(null);
+      }
+      await refreshEmails(false);
+    } catch (e: any) {
+      setError(String(e));
+    }
+  }
+
   async function runOpenSafely(linkIndex: number, allowTargetOrigin: boolean) {
     if (!selectedId) return;
     setError(null);
+    setIocsData(null);
     setOpenSafely({ open: true, loading: true });
     try {
       const res = await fetch(`${base}/emails/${selectedId}/open-safely`, {
@@ -207,6 +228,16 @@ export default function Home() {
         mobileUrl: mobile ? `${base}${mobile}` : undefined,
         iocsUrl: iocs ? `${base}${iocs}` : undefined
       });
+
+      // Fetch IOCs data
+      if (iocs) {
+        try {
+          const iocsRes = await fetch(`${base}${iocs}`, { cache: 'no-store' });
+          if (iocsRes.ok) {
+            setIocsData(await iocsRes.json());
+          }
+        } catch { /* ignore */ }
+      }
     } catch (e: any) {
       setError(String(e));
       setOpenSafely({ open: true, loading: false });
@@ -229,6 +260,8 @@ export default function Home() {
         await refreshEmails(true);
       } catch {
         // ignore; rendered error covers it
+      } finally {
+        setInitialLoading(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -340,7 +373,9 @@ export default function Home() {
             <strong>Emails</strong> <span style={{ color: 'rgba(229,231,235,0.75)' }}>({emails.length})</span>
           </div>
           <div style={{ maxHeight: 560, overflow: 'auto' }}>
-            {emails.length === 0 ? (
+            {initialLoading ? (
+              <div style={{ padding: 12, color: 'rgba(229,231,235,0.8)' }}>Loading emails...</div>
+            ) : emails.length === 0 ? (
               <div style={{ padding: 12, color: 'rgba(229,231,235,0.8)' }}>Upload an .eml to get started ✉️</div>
             ) : (
               emails.map((e) => (
@@ -362,21 +397,46 @@ export default function Home() {
                     cursor: 'pointer'
                   }}
                 >
-                  <div style={{ fontWeight: 800, marginBottom: 4, fontSize: 13 }}>{e.subject || '(no subject)'}</div>
-                  <div style={{ color: 'rgba(229,231,235,0.85)', fontSize: 12, marginBottom: 6 }}>
-                    {e.from_addr || '(unknown sender)'}
-                  </div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      gap: 8,
-                      fontSize: 11,
-                      color: 'rgba(229,231,235,0.7)'
-                    }}
-                  >
-                    <span>{e.source}</span>
-                    <span>{new Date(e.created_at).toLocaleString()}</span>
+                  <div style={{ position: 'relative' }}>
+                    <button
+                      onClick={(ev) => deleteEmail(e.id, ev)}
+                      style={{
+                        position: 'absolute',
+                        top: 4,
+                        right: 4,
+                        width: 22,
+                        height: 22,
+                        borderRadius: 6,
+                        border: '1px solid rgba(255,255,255,0.15)',
+                        background: 'rgba(239,68,68,0.2)',
+                        color: 'rgba(239,68,68,0.9)',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: 0,
+                      }}
+                      title="Delete email"
+                    >
+                      ×
+                    </button>
+                    <div style={{ fontWeight: 800, marginBottom: 4, fontSize: 13 }}>{e.subject || '(no subject)'}</div>
+                    <div style={{ color: 'rgba(229,231,235,0.85)', fontSize: 12, marginBottom: 6 }}>
+                      {e.from_addr || '(unknown sender)'}
+                    </div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                        fontSize: 11,
+                        color: 'rgba(229,231,235,0.7)'
+                      }}
+                    >
+                      <span>{e.source}</span>
+                      <span>{new Date(e.created_at).toLocaleString()}</span>
+                    </div>
                   </div>
                 </button>
               ))
@@ -631,22 +691,32 @@ export default function Home() {
                       </div>
                     ) : null}
 
-                    {!openSafely.loading && openSafely.iocsUrl ? (
+                    {!openSafely.loading && (iocsData || openSafely.iocsUrl) ? (
                       <div style={{ marginTop: 12 }}>
-                        <div style={{ color: 'rgba(229,231,235,0.85)', marginBottom: 8 }}>IOCs 🧬</div>
-                        <pre
-                          style={{
-                            margin: 0,
-                            padding: 12,
-                            borderRadius: 12,
-                            border: '1px solid rgba(255,255,255,0.12)',
-                            background: 'rgba(0,0,0,0.25)',
-                            color: 'rgba(243,244,246,0.95)',
-                            overflow: 'auto'
-                          }}
-                        >
-                          (Open in new tab: {openSafely.iocsUrl})
-                        </pre>
+                        <div style={{ color: 'rgba(229,231,235,0.85)', marginBottom: 8, fontWeight: 700 }}>IOCs (Indicators of Compromise)</div>
+                        {iocsData ? (
+                          <pre
+                            style={{
+                              margin: 0,
+                              padding: 12,
+                              borderRadius: 12,
+                              border: '1px solid rgba(255,255,255,0.12)',
+                              background: 'rgba(0,0,0,0.25)',
+                              color: 'rgba(243,244,246,0.95)',
+                              overflow: 'auto',
+                              maxHeight: 300,
+                              fontSize: 12,
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-all'
+                            }}
+                          >
+                            {JSON.stringify(iocsData, null, 2)}
+                          </pre>
+                        ) : (
+                          <a href={`${base}${openSafely.iocsUrl}`} target="_blank" rel="noopener noreferrer" style={{ color: '#818cf8' }}>
+                            Download IOCs JSON
+                          </a>
+                        )}
                       </div>
                     ) : null}
                   </div>
