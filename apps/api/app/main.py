@@ -38,72 +38,184 @@ def _ai_enabled() -> bool:
     return bool(os.getenv("OLLAMA_BASE_URL"))
 
 
+# Known domains that legitimately appear in emails from other senders
+_KNOWN_THIRD_PARTY = {
+    # Email marketing / tracking
+    "mailchimp.com", "sendgrid.net", "sendgrid.com", "constantcontact.com",
+    "mailgun.com", "amazonses.com", "mandrillapp.com", "hubspot.com",
+    "marketo.com", "pardot.com", "salesforce.com", "exacttarget.com",
+    "list-manage.com", "campaign-archive.com", "createsend.com",
+    # CDNs and hosting
+    "cloudfront.net", "akamaihd.net", "googleapis.com", "gstatic.com",
+    "cloudflare.com", "fastly.net", "edgekey.net", "azureedge.net",
+    "s3.amazonaws.com", "blob.core.windows.net",
+    # URL shorteners (suspicious alone but not phishing)
+    "bit.ly", "goo.gl", "t.co", "ow.ly", "tinyurl.com",
+    # Social / common
+    "facebook.com", "twitter.com", "linkedin.com", "instagram.com",
+    "youtube.com", "google.com", "apple.com", "microsoft.com",
+    # Analytics / tracking pixels
+    "doubleclick.net", "google-analytics.com", "demdex.net",
+    "omtrdc.net", "eloqua.com", "marketo.net",
+}
+
+def _is_third_party_domain(host: str) -> bool:
+    """Check if a domain is a known third-party service."""
+    reg = _registrable_domain(host)
+    return reg in _KNOWN_THIRD_PARTY or host in _KNOWN_THIRD_PARTY
+
+
 def _heuristic_detect_fallback(e: Email) -> tuple[int, str, list[str]]:
     """
-    Robust fallback logic (V7) if AI fails.
+    Precision-tuned heuristic detection (V8).
+
+    Design principles:
+    - Single indicator = low score (informational)
+    - Multiple correlated indicators = escalating score
+    - Known-safe patterns actively reduce score
+    - Only flag phishing (>=65) when there's strong evidence
     """
     text = (e.body_text or "").lower()
     subject = (e.subject or "").lower()
+    from_addr_raw = e.from_addr or ""
     urls = e.extracted_urls or []
-    
+
     reasons = []
     score = 0
-    
-    # 1. Header Analysis
-    email_match = re.search(r"<([^>]+)>", e.from_addr or "")
-    sender_email = email_match.group(1).lower() if email_match else (e.from_addr or "").lower()
+    indicator_count = 0  # Track how many distinct red flags we find
+
+    # --- Extract sender info ---
+    email_match = re.search(r"<([^>]+)>", from_addr_raw)
+    sender_email = email_match.group(1).lower() if email_match else from_addr_raw.lower()
     sender_domain = sender_email.split("@")[-1] if "@" in sender_email else ""
     sender_reg = _registrable_domain(sender_domain)
+    sender_display = from_addr_raw.split("<")[0].strip().strip('"').lower() if "<" in from_addr_raw else ""
 
-    # 2. Keywords
-    scam_phrases = ["compensation fund", "winning notification", "inheritance claim", "million usd", "western union"]
-    if any(p in text for p in scam_phrases):
-        reasons.append("Fallback: Financial scam language detected")
-        score += 50 
+    # --- 1. Sender Analysis ---
 
-    urgent_words = ["immediately", "account suspended", "action required", "security alert", "terminate", "verify your account"]
-    if any(w in subject or w in text for w in urgent_words):
-        reasons.append("Fallback: Urgent/Threatening language")
-        score += 25
-
-    # 3. URL Analysis
-    generic_domains = {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com"}
-    siblings = {
-        "google.com": {"google.dev", "youtube.com", "gmail.com", "googlesource.com", "gstatic.com", "appspot.com", "googleusercontent.com"},
-        "microsoft.com": {"office.com", "office365.com", "azure.com", "linkedin.com", "live.com", "sharepoint.com", "microsoftonline.com"},
-        "amazon.com": {"media-amazon.com", "amazonaws.com", "aws.amazon.com", "amazon.co.uk", "amazon.ca"},
+    # Display name spoofing: display name contains a well-known brand but email domain doesn't match
+    brand_domains = {
+        "paypal": "paypal.com", "amazon": "amazon.com", "apple": "apple.com",
+        "microsoft": "microsoft.com", "google": "google.com", "netflix": "netflix.com",
+        "bank of america": "bankofamerica.com", "wells fargo": "wellsfargo.com",
+        "chase": "chase.com", "coinbase": "coinbase.com", "binance": "binance.com",
     }
-    
-    mismatch_counted = False
+    for brand, legit_domain in brand_domains.items():
+        if brand in sender_display and sender_reg != _registrable_domain(legit_domain):
+            reasons.append(f"Sender display name mentions '{brand}' but email domain is {sender_domain}")
+            score += 30
+            indicator_count += 1
+            break
+
+    # --- 2. Content Analysis (conservative weights) ---
+
+    # High-confidence scam phrases (very specific, rarely in legit emails)
+    high_conf_phrases = [
+        "compensation fund", "winning notification", "inheritance claim",
+        "million usd", "western union", "money gram", "next of kin",
+        "unclaimed fund", "lottery winner", "dear beneficiary",
+        "united nations compensation", "diplomatic agent",
+    ]
+    matched_scam = [p for p in high_conf_phrases if p in text]
+    if matched_scam:
+        reasons.append(f"High-confidence scam language: '{matched_scam[0]}'")
+        score += 40
+        indicator_count += 1
+
+    # Urgency language (only contributes if OTHER indicators are also present)
+    urgent_phrases = [
+        "account suspended", "account will be closed", "verify your identity",
+        "unauthorized transaction", "suspicious activity on your account",
+        "confirm your payment", "your account has been limited",
+    ]
+    has_urgency = any(p in text or p in subject for p in urgent_phrases)
+    if has_urgency:
+        # Urgency alone is worth very little — legit services also send urgent emails
+        reasons.append("Urgency/pressure language detected")
+        score += 10
+        indicator_count += 1
+
+    # --- 3. URL Analysis (the most important signals) ---
+
+    generic_domains = {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com", "aol.com"}
+    siblings = {
+        "google.com": {"google.dev", "youtube.com", "gmail.com", "googlesource.com", "gstatic.com", "appspot.com", "googleusercontent.com", "googleapis.com"},
+        "microsoft.com": {"office.com", "office365.com", "azure.com", "linkedin.com", "live.com", "sharepoint.com", "microsoftonline.com", "outlook.com"},
+        "amazon.com": {"media-amazon.com", "amazonaws.com", "amazon.co.uk", "amazon.ca", "amazon.de"},
+        "apple.com": {"icloud.com", "mzstatic.com"},
+        "meta.com": {"facebook.com", "instagram.com", "whatsapp.com", "fbcdn.net"},
+    }
+
     has_ip = False
-    
-    for u in urls[:20]:
+    has_punycode = False
+    mismatch_count = 0
+    total_urls = len(urls)
+    has_unsubscribe = False
+
+    for u in urls[:30]:
+        u_lower = u.lower()
         host = (urlparse(u).hostname or "").strip(".").lower()
-        if not host: continue
+        if not host:
+            continue
         host_reg = _registrable_domain(host)
 
-        if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host) and not has_ip:
-            reasons.append(f"Fallback: Link uses raw IP address ({host})")
-            score += 80
-            has_ip = True
-        
-        if "xn--" in host:
-            reasons.append("Fallback: Punycode domain detected")
-            score += 80
+        # Check for unsubscribe links (strong positive signal)
+        if "unsubscribe" in u_lower or "opt-out" in u_lower or "optout" in u_lower:
+            has_unsubscribe = True
 
-        if sender_domain and sender_domain not in generic_domains:
+        # Raw IP in link
+        if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host) and not has_ip:
+            reasons.append(f"Link uses raw IP address ({host})")
+            score += 35
+            indicator_count += 1
+            has_ip = True
+
+        # Punycode / IDN homograph
+        if "xn--" in host and not has_punycode:
+            reasons.append(f"Punycode/IDN domain detected: {host}")
+            score += 35
+            indicator_count += 1
+            has_punycode = True
+
+        # Domain mismatch (skip known third-party services and generic senders)
+        if sender_domain and sender_domain not in generic_domains and not _is_third_party_domain(host):
             is_safe = False
-            if _domain_matches(sender_domain, host): is_safe = True
+            if _domain_matches(sender_domain, host):
+                is_safe = True
             if not is_safe and sender_reg in siblings:
                 if any(host_reg == _registrable_domain(s) or host.endswith("." + s) for s in siblings[sender_reg]):
                     is_safe = True
-            
-            if not is_safe and not mismatch_counted:
-                 reasons.append(f"Fallback: Link mismatch ({sender_domain} -> {host})")
-                 score += 40
-                 mismatch_counted = True
+            if not is_safe and not _is_third_party_domain(host):
+                mismatch_count += 1
 
-    score = min(100, score)
+    # Only flag mismatch if it's the MAJORITY of links (not just one tracking pixel)
+    if mismatch_count > 0 and total_urls > 0:
+        mismatch_ratio = mismatch_count / min(total_urls, 30)
+        if mismatch_ratio > 0.5:
+            reasons.append(f"Majority of links ({mismatch_count}/{min(total_urls, 30)}) point to domains unrelated to sender ({sender_domain})")
+            score += 25
+            indicator_count += 1
+        elif mismatch_count >= 3:
+            reasons.append(f"Multiple links ({mismatch_count}) point to domains unrelated to sender")
+            score += 15
+            indicator_count += 1
+
+    # --- 4. Positive signals (reduce score) ---
+
+    if has_unsubscribe and score > 0:
+        reasons.append("Contains unsubscribe link (common in legitimate bulk email)")
+        score = max(0, score - 15)
+
+    # Short, simple emails with no URLs are very low risk
+    if total_urls == 0 and len(text) < 500:
+        score = max(0, score - 10)
+
+    # --- 5. Correlation bonus: multiple indicators compound ---
+    if indicator_count >= 3:
+        reasons.append(f"Multiple correlated indicators ({indicator_count}) suggest coordinated phishing attempt")
+        score += 15
+
+    score = max(0, min(100, score))
     label = "phishing" if score >= 65 else "suspicious" if score >= 30 else "benign"
     return score, label, reasons
 
@@ -294,6 +406,16 @@ def list_emails(db: Session = Depends(get_db)):
     ]
 
 
+@app.delete("/emails/{email_id}")
+def delete_email(email_id: str, db: Session = Depends(get_db)):
+    e = db.query(Email).filter(Email.id == email_id).first()
+    if not e:
+        raise HTTPException(status_code=404, detail="email not found")
+    db.delete(e)
+    db.commit()
+    return {"ok": True, "deleted": email_id}
+
+
 @app.get("/emails/{email_id}")
 def get_email(email_id: str, db: Session = Depends(get_db)):
     e = db.query(Email).filter(Email.id == email_id).first()
@@ -328,6 +450,10 @@ async def detect(email_id: str, use_llm: bool = True, db: Session = Depends(get_
     if not e:
         raise HTTPException(status_code=404, detail="email not found")
 
+    # Delete old detections for this email to avoid ORM relationship issues
+    db.query(Detection).filter(Detection.email_id == email_id).delete()
+    db.flush()
+
     subject = e.subject or ""
     from_addr = e.from_addr or ""
     to_addr = e.to_addr or ""
@@ -350,7 +476,7 @@ async def detect(email_id: str, use_llm: bool = True, db: Session = Depends(get_
             else:
                 reasons.append(str(ai_reasons))
 
-            # Guardrail: Tech Check
+            # Guardrail: Only override if AI scored way too low on obvious technical indicators
             has_ip_link = False
             has_punycode = False
             for u in urls[:25]:
@@ -359,19 +485,21 @@ async def detect(email_id: str, use_llm: bool = True, db: Session = Depends(get_
                 if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host): has_ip_link = True
                 if "xn--" in host: has_punycode = True
 
-            if (has_ip_link or has_punycode) and final_score < 80:
-                final_score = 85
-                label = "phishing"
-                reasons.append("System Override: Technical indicator (raw IP / punycode) present.")
+            if (has_ip_link or has_punycode) and final_score < 40:
+                old_score = final_score
+                final_score = max(final_score, 55)
+                if final_score != old_score:
+                    reasons.append(f"Guardrail: Technical indicator present, score adjusted from {old_score}")
+                    label = "suspicious" if label == "benign" else label
 
-            # Final Cleanup
+            # Final bounds
             final_score = max(0, min(100, final_score))
-            
-            # CONSISTENCY CHECK: Fix Llama 3.2 1B contradictions (e.g. "benign" but score 100)
-            if label == "benign" and final_score > 40:
-                final_score = 10
-            elif label == "phishing" and final_score < 60:
-                final_score = 80
+
+            # Consistency check: only fix extreme contradictions
+            if label == "benign" and final_score > 60:
+                final_score = 15
+            elif label == "phishing" and final_score < 30:
+                label = "suspicious"
                 
             seen = set()
             reasons = [x for x in reasons if not (x in seen or seen.add(x))]
@@ -404,16 +532,48 @@ async def rewrite(email_id: str, use_llm: bool = False, db: Session = Depends(ge
     e = db.query(Email).filter(Email.id == email_id).first()
     if not e:
         raise HTTPException(status_code=404, detail="email not found")
-    
-    # Rewrite is simple rule-based only in free version
-    safe = _strip_links(e.body_text or "")
+
+    # Delete old rewrites for this email
+    db.query(Rewrite).filter(Rewrite.email_id == email_id).delete()
+    db.flush()
+
+    safe_body = _strip_links(e.body_text or "")
     used_llm_actual = False
 
-    rw = Rewrite(email_id=email_id, safe_subject=e.subject, safe_body=safe, used_llm=used_llm_actual, created_at=datetime.now(timezone.utc))
+    if use_llm and _ai_enabled():
+        try:
+            from app.ai_engine import _get_client
+            client = _get_client()
+            prompt = f"""Rewrite this email to be safe. Remove all suspicious elements:
+- Replace all URLs with [LINK REMOVED]
+- Remove urgency/pressure language
+- Neutralize social engineering tactics
+- Keep the core informational content
+- Add [REWRITTEN BY PHISHNET] at the top
+
+Original email:
+{(e.body_text or '')[:3000]}"""
+
+            response = client.chat.completions.create(
+                model="llama3.2:1b",
+                messages=[
+                    {"role": "system", "content": "You rewrite emails to remove phishing elements. Output only the rewritten email text."},
+                    {"role": "user", "content": prompt}
+                ],
+                extra_body={"keep_alive": "5m"},
+            )
+            llm_result = response.choices[0].message.content
+            if llm_result and len(llm_result.strip()) > 20:
+                safe_body = llm_result.strip()
+                used_llm_actual = True
+        except Exception as ex:
+            print(f"LLM rewrite failed, using rule-based: {ex}")
+
+    rw = Rewrite(email_id=email_id, safe_subject=e.subject, safe_body=safe_body, used_llm=used_llm_actual, created_at=datetime.now(timezone.utc))
     db.add(rw)
     db.commit()
 
-    return RewriteResult(safe_subject=e.subject, safe_body=safe, used_llm=used_llm_actual)
+    return RewriteResult(safe_subject=e.subject, safe_body=safe_body, used_llm=used_llm_actual)
 
 
 # ... (OpenSafely endpoints below)
