@@ -101,6 +101,9 @@ export default function Home() {
 
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
   const [dragOver, setDragOver] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+
+  const [iocsData, setIocsData] = useState<any>(null);
 
   const [openSafely, setOpenSafely] = useState<{
     open: boolean;
@@ -111,7 +114,7 @@ export default function Home() {
     iocsUrl?: string;
   }>({ open: false, loading: false });
 
-  /* --- API calls (logic unchanged) --- */
+  /* --- API calls --- */
 
   const refreshHealth = useCallback(async () => {
     try {
@@ -216,9 +219,27 @@ export default function Home() {
     }
   }
 
+  async function deleteEmail(id: string, ev: React.MouseEvent) {
+    ev.stopPropagation();
+    if (!confirm('Delete this email?')) return;
+    try {
+      await fetch(`${base}/emails/${id}`, { method: 'DELETE' });
+      if (selectedId === id) {
+        setSelectedId(null);
+        setDetail(null);
+        setDetection(null);
+        setRewrite(null);
+      }
+      await refreshEmails(false);
+    } catch (e: any) {
+      setError(String(e));
+    }
+  }
+
   async function runOpenSafely(linkIndex: number, allowTargetOrigin: boolean) {
     if (!selectedId) return;
     setError(null);
+    setIocsData(null);
     setOpenSafely({ open: true, loading: true });
     try {
       const res = await fetch(`${base}/emails/${selectedId}/open-safely`, {
@@ -253,6 +274,15 @@ export default function Home() {
         mobileUrl: mobile ? `${base}${mobile}` : undefined,
         iocsUrl: iocs ? `${base}${iocs}` : undefined,
       });
+
+      if (iocs) {
+        try {
+          const iocsRes = await fetch(`${base}${iocs}`, { cache: 'no-store' });
+          if (iocsRes.ok) {
+            setIocsData(await iocsRes.json());
+          }
+        } catch { /* ignore */ }
+      }
     } catch (e: any) {
       setError(String(e));
       setOpenSafely({ open: true, loading: false });
@@ -287,6 +317,8 @@ export default function Home() {
         await refreshEmails(true);
       } catch {
         /* ignore */
+      } finally {
+        setInitialLoading(false);
       }
     })();
   }, [refreshHealth, refreshEmails]);
@@ -417,7 +449,9 @@ export default function Home() {
               </button>
             </div>
             <div className="inbox-list">
-              {emails.length === 0 ? (
+              {initialLoading ? (
+                <div className="inbox-empty">Loading emails...</div>
+              ) : emails.length === 0 ? (
                 <div className="inbox-empty">
                   <div className="inbox-empty-title">No emails yet</div>
                   Upload an .eml file to get started.
@@ -429,6 +463,13 @@ export default function Home() {
                     className={`email-item${e.id === selectedId ? ' email-item--active' : ''}`}
                     onClick={() => setSelectedId(e.id)}
                   >
+                    <button
+                      className="email-item-delete"
+                      onClick={(ev) => deleteEmail(e.id, ev)}
+                      title="Delete email"
+                    >
+                      &times;
+                    </button>
                     <div className="email-item-subject">{e.subject || '(no subject)'}</div>
                     <div className="email-item-from">{e.from_addr || '(unknown sender)'}</div>
                     <div className="email-item-meta">
@@ -562,10 +603,21 @@ export default function Home() {
                   </div>
                 </div>
               )}
-              {!openSafely.loading && openSafely.iocsUrl && (
+              {!openSafely.loading && (iocsData || openSafely.iocsUrl) && (
                 <div style={{ marginTop: 16 }}>
                   <div className="modal-section-label">Indicators of Compromise</div>
-                  <pre className="modal-pre">Open in new tab: {openSafely.iocsUrl}</pre>
+                  {iocsData ? (
+                    <pre className="modal-pre">{JSON.stringify(iocsData, null, 2)}</pre>
+                  ) : (
+                    <a
+                      href={`${base}${openSafely.iocsUrl}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn btn--sm"
+                    >
+                      Download IOCs JSON
+                    </a>
+                  )}
                 </div>
               )}
             </div>

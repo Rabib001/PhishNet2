@@ -35,8 +35,8 @@ class Email(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
-    detection: Mapped["Detection | None"] = relationship(back_populates="email", uselist=False, cascade="all, delete-orphan")
-    rewrite: Mapped["Rewrite | None"] = relationship(back_populates="email", uselist=False, cascade="all, delete-orphan")
+    detections: Mapped[list["Detection"]] = relationship(back_populates="email", cascade="all, delete-orphan")
+    rewrites: Mapped[list["Rewrite"]] = relationship(back_populates="email", cascade="all, delete-orphan")
     jobs: Mapped[list["OpenSafelyJob"]] = relationship(back_populates="email", cascade="all, delete-orphan")
 
 
@@ -52,7 +52,7 @@ class Detection(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
-    email: Mapped[Email] = relationship(back_populates="detection")
+    email: Mapped[Email] = relationship(back_populates="detections")
 
 
 class Rewrite(Base):
@@ -67,7 +67,7 @@ class Rewrite(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
-    email: Mapped[Email] = relationship(back_populates="rewrite")
+    email: Mapped[Email] = relationship(back_populates="rewrites")
 
 
 class OpenSafelyJob(Base):
