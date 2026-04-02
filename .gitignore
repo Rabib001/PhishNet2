@@ -14,6 +14,10 @@ apps/web/out/
 
 # env
 .env
+.env.*
+
+# claude code
+.claude/
 
 # openclaw agent workspace (not part of the product repo)
 AGENTS.md
