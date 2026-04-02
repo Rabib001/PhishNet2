@@ -1,10 +1,15 @@
 {
   "base_model": "distilbert-base-uncased",
-  "max_length": 256,
-  "epochs": 3,
-  "train_samples": 4000,
-  "test_accuracy": 0.962,
-  "test_f1": 0.9622266401590457,
-  "test_precision": 0.9565217391304348,
-  "test_recall": 0.968
+  "max_length": 512,
+  "epochs": 6,
+  "batch_size": 32,
+  "device": "cuda",
+  "fp16": true,
+  "total_samples": 54804,
+  "train_samples": 46583,
+  "input_format": "subject: {subject} [SEP] body: {body}",
+  "test_accuracy": 0.9929457552906835,
+  "test_f1": 0.9929526123936816,
+  "test_precision": 0.9917475728155339,
+  "test_recall": 0.9941605839416059
 }

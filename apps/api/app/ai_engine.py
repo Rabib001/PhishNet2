@@ -41,27 +41,48 @@ def _extract_json(text: str) -> dict | None:
 
 def detect_email_with_local_ai(subject: str, from_addr: str, body_text: str, urls: list[str]) -> dict:
     """Structured detection for emails using local Ollama."""
-    prompt = f"""You are a security analyst. Analyze this email for phishing indicators.
+    url_list = json.dumps(urls[:10], ensure_ascii=False)
+    body_snippet = body_text[:1800].strip()
 
-Return ONLY a JSON object with these exact keys:
-- "label": one of "benign", "suspicious", or "phishing"
-- "score": integer 0-100 (0=definitely safe, 100=definitely phishing)
-- "reasons": array of short strings explaining your reasoning
+    prompt = f"""TASK: Classify this email as phishing, suspicious, or benign.
 
-Be calibrated: most legitimate emails should score 0-15. Only flag emails with clear deceptive intent or technical phishing indicators.
+SCORING GUIDE (pick score first, then derive label):
+- 0-20  = benign    (normal work/personal email, newsletters, receipts from known brands)
+- 21-50 = suspicious (unusual sender, vague urgency, mismatched links, but not conclusive)
+- 51-100 = phishing  (clear deception: fake login pages, credential harvesting, spoofed brand, wire transfer fraud)
 
-EMAIL DATA:
+PHISHING RED FLAGS — each one found adds weight:
+1. Urgency + threat: "account suspended", "verify now or lose access", "immediate action required"
+2. Spoofed sender: display name says "PayPal" but email domain is not paypal.com
+3. Link mismatch: link text says one domain but href goes to a different domain
+4. Credential request: asks for password, SSN, credit card, OTP via email
+5. Wire transfer / gift card request: "buy $500 in gift cards", "transfer funds"
+6. Lookalike domain: paypa1.com, micosoft.com, arnazon.com
+7. Raw IP in URL: http://192.168.x.x/login
+8. Excessive urgency + prize: "You won!", "Claim your reward in 24 hours"
+
+LEGITIMATE INDICATORS (lower the score):
+- Sent from matching corporate domain (e.g. amazon.com email links to amazon.com)
+- No credential/payment requests
+- Professional language, no spelling errors
+- Known sender pattern (e.g. shipping notifications, calendar invites)
+
+EMAIL:
 Subject: {subject}
 From: {from_addr}
-Body (first 2000 chars): {body_text[:2000]}
-URLs found: {json.dumps(urls[:10], ensure_ascii=False)}""".strip()
+Body:
+{body_snippet}
+URLs: {url_list}
+
+Respond with ONLY this JSON (no other text):
+{{"score": <0-100>, "label": "<benign|suspicious|phishing>", "reasons": ["<reason1>", "<reason2>"]}}"""
 
     client = _get_client()
     try:
         response = client.chat.completions.create(
             model="llama3.2:1b",
             messages=[
-                {"role": "system", "content": "You are a security analyst. Output valid JSON only. No other text."},
+                {"role": "system", "content": 'You are a phishing detection system. Reply with only a JSON object: {"score": int, "label": string, "reasons": [string]}'},
                 {"role": "user", "content": prompt}
             ],
             extra_body={"keep_alive": "5m"},
