@@ -23,7 +23,7 @@
 * **Model:** `distilbert-base-uncased` binary classifier, weights under `apps/api/bert/model/`.
 * **Input format:** Structured text aligned with training — subject, sender, body (truncated), and up to 10 URLs, joined with `[SEP]` (see `bert_engine.py` and `training_meta.json` → `input_format`).
 * **Training:** `apps/api/bert/train.py` can load **multiple Hugging Face datasets** (spam/phishing/labeled email sources), apply **class-weighted** loss, **warmup**, and train for **6 epochs** at **512** tokens when on GPU (fp16 on CUDA). Local CSV/JSON under `bert/dataset/` is still supported.
-* **Metrics:** Shipped `training_meta.json` includes test **accuracy**, **F1**, **precision**, and **recall** for the trained checkpoint.
+* **Train / validation / test split (shipped checkpoint):** After class balancing, `training_meta.json` records **54,804** total labeled rows (`total_samples`). **46,583** rows are used for training (`train_samples`). The script then holds out **15%** (**8,221** rows), splits that block **50/50** with stratification into **validation** and **test** — about **4,110** and **4,111** rows respectively (exact counts differ by one because the holdout is odd). Training uses the **train** split; per-epoch evaluation uses **validation**; the numbers in `training_meta.json` (**accuracy**, **F1**, **precision**, **recall**) come from the **test** split only.
 
 ### Heuristic engine
 
